@@ -1,0 +1,31 @@
+services:
+  backup-api:
+    build: .
+    image: single-volume-backup:latest
+    container_name: backup-api
+    # Required only so the demo script can mount/umount the two "disks"
+    # (bind mounts) over the single backup entry. The application code
+    # itself performs no mount operations.
+    privileged: true
+    environment:
+      # Volume id pre-provisioned on disk A (see demo/prepare-disks.sh).
+      BACKUP_VOLUME_ID: "VOL-DISK-A-0001"
+      BACKUP_ROOT: "/backups/data"
+      BACKUP_MAX_CHUNK_BYTES: "67108864"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Two plain host directories act as the two physical disks.
+      - ./demo/disks/disk-a:/disks/disk-a
+      - ./demo/disks/disk-b:/disks/disk-b
+      # Stable mount point inside the container; entrypoint bind-mounts
+      # disk A onto it before uvicorn starts.
+      - backup-mount:/backups
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  backup-mount:
