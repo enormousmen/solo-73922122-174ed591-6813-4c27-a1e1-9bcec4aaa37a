@@ -12,6 +12,11 @@ services:
       BACKUP_VOLUME_ID: "VOL-DISK-A-0001"
       BACKUP_ROOT: "/backups/data"
       BACKUP_MAX_CHUNK_BYTES: "67108864"
+      # Inventory booklets + reverse index live here. This is a separate
+      # named volume, NOT part of the backup mount /backups: pulling the
+      # backup disk never removes booklets, so archive-id -> disk-number
+      # lookups keep working after the disk is gone.
+      INVENTORY_ROOT: "/inventory"
     ports:
       - "8080:8080"
     volumes:
@@ -21,6 +26,10 @@ services:
       # Stable mount point inside the container; entrypoint bind-mounts
       # disk A onto it before uvicorn starts.
       - backup-mount:/backups
+      # Independent persistent inventory storage (survives disk pulls
+      # and container restarts; remove explicitly with
+      # `docker compose down -v` only when the booklets should be wiped).
+      - inventory-data:/inventory
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
       interval: 5s
@@ -29,3 +38,4 @@ services:
 
 volumes:
   backup-mount:
+  inventory-data:

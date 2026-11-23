@@ -10,13 +10,21 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .schemas import (
     ArchiveEntry,
+    ArchiveVolumeHit,
+    ArchiveVolumesResponse,
+    BookletListResponse,
+    BookletResponse,
+    BookletSummary,
     ChunkAck,
     CompleteResponse,
     CreateUploadRequest,
     CreateUploadResponse,
     HealthResponse,
+    InventoryArchiveEntry,
+    InventoryCommitResponse,
     ManifestResponse,
 )
+from .inventory import InventoryStore
 from .store import SessionStore
 from .volume import VolumeError, VolumeGuard
 
@@ -25,9 +33,13 @@ def create_app() -> FastAPI:
     root_path = os.environ.get("BACKUP_ROOT", "/backups/data")
     expected_id = os.environ.get("BACKUP_VOLUME_ID", "")
     max_chunk = int(os.environ.get("BACKUP_MAX_CHUNK_BYTES", str(64 * 1024 * 1024)))
+    # Independent persistent directory: must NOT live on the backup disk,
+    # so booklets survive the disk being pulled.
+    inventory_root = os.environ.get("INVENTORY_ROOT", "/inventory")
 
     guard = VolumeGuard(root_path=root_path, expected_volume_id=expected_id)
     store = SessionStore(guard)
+    inventory = InventoryStore(guard, root_path=inventory_root)
 
     app = FastAPI(
         title="Single-volume backup API",
@@ -159,6 +171,79 @@ def create_app() -> FastAPI:
                 ),
             },
         )
+
+    # ------------------------------------------------------------ inventory
+
+    @app.post(
+        "/inventory/volumes/{volume_id}",
+        response_model=InventoryCommitResponse,
+        status_code=201,
+    )
+    def run_inventory(volume_id: str) -> InventoryCommitResponse:
+        # The path parameter is the disk number ("盘号") the operator
+        # supplies; InventoryStore verifies it against the volume id the
+        # mount entry currently presents. Sync endpoint: the blocking disk
+        # read runs in the Starlette threadpool so concurrent requests
+        # (e.g. a second inventory getting a busy response) are not stalled.
+        result = inventory.run_inventory(volume_id)
+        return InventoryCommitResponse(**result)
+
+    @app.get(
+        "/inventory/volumes/{volume_id}/booklet",
+        response_model=BookletResponse,
+    )
+    def get_booklet(volume_id: str) -> BookletResponse:
+        booklet = inventory.get_booklet(volume_id)
+        if booklet is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "BOOKLET_NOT_FOUND",
+                    "detail": (
+                        f"no successful inventory has been committed for "
+                        f"volume {volume_id!r} yet"
+                    ),
+                },
+            )
+        return BookletResponse(
+            version=booklet["version"],
+            inventory_id=booklet["inventory_id"],
+            volume_id=booklet["volume_id"],
+            started_at=booklet["started_at"],
+            committed_at=booklet["committed_at"],
+            archive_count=booklet["archive_count"],
+            archives=[
+                InventoryArchiveEntry(**item) for item in booklet["archives"]
+            ],
+        )
+
+    @app.get("/inventory/volumes", response_model=BookletListResponse)
+    def list_booklets() -> BookletListResponse:
+        summaries = inventory.list_booklets()
+        return BookletListResponse(
+            booklets=[BookletSummary(**item) for item in summaries]
+        )
+
+    @app.get(
+        "/inventory/archives/{archive_id}/volumes",
+        response_model=ArchiveVolumesResponse,
+    )
+    def lookup_archive_volumes(
+        archive_id: str,
+    ) -> ArchiveVolumesResponse:
+        # Read-only lookup against the persistent inventory directory:
+        # answers while an inventory is uncommitted, after the disk is
+        # pulled and after a service restart.
+        hits = inventory.lookup_archive(archive_id)
+        return ArchiveVolumesResponse(
+            archive_id=archive_id,
+            volumes=[ArchiveVolumeHit(**item) for item in hits],
+        )
+
+    # Exposed for tests / diagnostics; not part of the HTTP contract.
+    app.state.inventory_store = inventory
+    app.state.session_store = store
+    app.state.volume_guard = guard
 
     return app
 

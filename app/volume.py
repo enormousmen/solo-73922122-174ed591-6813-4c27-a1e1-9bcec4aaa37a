@@ -138,6 +138,74 @@ class VolumeGuard:
             fd=root_fd,
         )
 
+    def probe_any(self) -> Probe:
+        """Probe the entry *without* enforcing the provisioned volume id.
+
+        Used by the inventory flow, whose rule is "the operator-supplied
+        disk number must match whatever volume the entry currently
+        presents" -- an operator may inventory the currently mounted
+        backup disk even though uploads remain pinned to the provisioned
+        one. The entry must still exist, open, and carry a readable
+        volume id file; the returned fd still pins the mount for the
+        whole read.
+        """
+        try:
+            st = os.stat(self.root_path)
+        except OSError as exc:
+            raise VolumeError(
+                "VOLUME_UNAVAILABLE",
+                503,
+                f"backup entry {self.root_path!r} is unavailable: {exc}",
+            ) from exc
+
+        try:
+            root_fd = os.open(
+                self.root_path, _O_PATH | os.O_DIRECTORY | os.O_CLOEXEC
+            )
+        except OSError as exc:
+            raise VolumeError(
+                "VOLUME_UNAVAILABLE",
+                503,
+                f"cannot open backup entry {self.root_path!r}: {exc}",
+            ) from exc
+
+        try:
+            try:
+                id_fd = os.open(
+                    self.id_filename, os.O_RDONLY | os.O_CLOEXEC, dir_fd=root_fd
+                )
+            except OSError as exc:
+                raise VolumeError(
+                    "VOLUME_ID_MISMATCH",
+                    409,
+                    f"volume id file {self.id_filename!r} is missing or "
+                    f"unreadable at the backup entry: {exc}",
+                ) from exc
+            try:
+                raw = os.read(id_fd, 4096)
+            finally:
+                os.close(id_fd)
+            volume_id = raw.decode("utf-8", errors="replace").strip()
+        except VolumeError:
+            os.close(root_fd)
+            raise
+
+        if not volume_id:
+            os.close(root_fd)
+            raise VolumeError(
+                "VOLUME_ID_MISMATCH",
+                409,
+                f"volume id file {self.id_filename!r} at the backup entry "
+                "is empty",
+            )
+
+        return Probe(
+            root_path=self.root_path,
+            dev=st.st_dev,
+            volume_id=volume_id,
+            fd=root_fd,
+        )
+
     @staticmethod
     def pinned_dev(fd: int) -> int:
         """Device id of the mount a pinned descriptor actually points at."""

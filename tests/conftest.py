@@ -50,8 +50,15 @@ def layout(tmp_path):
 def client(layout, monkeypatch):
     monkeypatch.setenv("BACKUP_ROOT", layout["root"])
     monkeypatch.setenv("BACKUP_VOLUME_ID", VOLUME_ID)
+    # Inventory booklets live in their own persistent directory, never on
+    # the simulated backup disks.
+    inventory_root = os.path.join(layout["tmp"], "inventory")
+    os.makedirs(inventory_root, exist_ok=True)
+    monkeypatch.setenv("INVENTORY_ROOT", inventory_root)
+    layout["inventory"] = inventory_root
     app = create_app()
     with TestClient(app) as test_client:
+        test_client.app_state = app.state
         yield test_client
 
 

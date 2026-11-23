@@ -77,3 +77,59 @@ class HealthResponse(BaseModel):
     expected_volume_id: str
     actual_volume_id: str | None = None
     error: str | None = None
+
+
+# ------------------------------------------------------------- inventory
+
+
+class InventoryArchiveEntry(BaseModel):
+    """One archive record inside an inventory booklet."""
+
+    id: str
+    filename: str
+    sha256: str
+    size: int
+    volume_id: str
+    created_at: float
+    uploaded_at: float
+
+
+class InventoryCommitResponse(BaseModel):
+    inventory_id: str
+    volume_id: str
+    archive_count: int
+    started_at: float
+    committed_at: float
+    indexed_volumes: int
+
+
+class BookletResponse(BaseModel):
+    version: int
+    inventory_id: str
+    volume_id: str
+    started_at: float
+    committed_at: float
+    archive_count: int
+    archives: list[InventoryArchiveEntry]
+
+
+class BookletSummary(BaseModel):
+    volume_id: str
+    inventory_id: str
+    committed_at: float
+    archive_count: int
+
+
+class BookletListResponse(BaseModel):
+    booklets: list[BookletSummary]
+
+
+class ArchiveVolumeHit(BaseModel):
+    volume_id: str
+    inventory_id: str
+    committed_at: float
+
+
+class ArchiveVolumesResponse(BaseModel):
+    archive_id: str
+    volumes: list[ArchiveVolumeHit]
